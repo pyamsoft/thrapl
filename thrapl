@@ -1,0 +1,926 @@
+#!/bin/sh
+
+# The GPLv2 License
+#
+#   Copyright (C) 2026 pyamsoft
+#
+#   This program is free software; you can redistribute it and/or modify
+#   it under the terms of the GNU General Public License as published by
+#   the Free Software Foundation; either version 2 of the License, or
+#   (at your option) any later version.
+#
+#   This program is distributed in the hope that it will be useful,
+#   but WITHOUT ANY WARRANTY; without even the implied warranty of
+#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#   GNU General Public License for more details.
+#
+#   You should have received a copy of the GNU General Public License along
+#   with this program; if not, write to the Free Software Foundation, Inc.,
+#   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+
+# thrapl
+# by: pyamsoft <developer(dot)pyamsoft(at)gmail(dot)com>
+readonly __VERSION="0.0.1"
+
+##
+# Normal log
+# Can be seen at
+# __log_level = normal, verbose, all
+_log() {
+  if [ "$#" -eq 0 ]; then
+    return 1
+  fi
+
+  if [ "${__log_level}" -ge "${LOG_LEVEL_NORMAL}" ]; then
+    log__fmt="$1"
+    shift
+    # shellcheck disable=SC2059
+    printf -- "${log__fmt}\n" "$@"
+    unset log__fmt
+  fi
+
+  return 0
+}
+
+##
+# Verbose log
+# Can be seen at
+# __log_level = verbose, all
+_log_verbose() {
+  if [ "$#" -eq 0 ]; then
+    return 1
+  fi
+
+  if [ "${__log_level}" -ge "${LOG_LEVEL_VERBOSE}" ]; then
+    log__fmt="$1"
+    shift
+    # shellcheck disable=SC2059
+    printf -- "VERBOSE: ${log__fmt}\n" "$@"
+    unset log__fmt
+  fi
+
+  return 0
+}
+
+##
+# All log
+# Can be seen at
+# __log_level = all
+_log_all() {
+  if [ "$#" -eq 0 ]; then
+    return 1
+  fi
+
+  if [ "${__log_level}" -eq "${LOG_LEVEL_ALL}" ]; then
+    log__fmt="$1"
+    shift
+    # shellcheck disable=SC2059
+    printf -- "DEBUG: ${log__fmt}\n" "$@"
+    unset log__fmt
+  fi
+
+  return 0
+}
+
+##
+# Quiet log
+# Can be seen at
+# __log_level = quiet, normal, verbose, all
+_log_quiet() {
+  if [ "$#" -eq 0 ]; then
+    return 1
+  fi
+
+  if [ "${__log_level}" -ge "${LOG_LEVEL_QUIET}" ]; then
+    log__fmt="$1"
+    shift
+    # shellcheck disable=SC2059
+    printf -- "${log__fmt}\n" "$@"
+    unset log__fmt
+  fi
+
+  return 0
+}
+
+##
+# Quiet error logging
+_elog_quiet() {
+  if [ "$#" -eq 0 ]; then
+    return 1
+  fi
+
+  elog__fmt="$1"
+  shift
+  _log_quiet "\033[0;31mERROR: ${elog__fmt}\033[0m" "$@" 1>&2
+
+  unset elog__fmt
+  return 0
+}
+
+##
+# Check the environment path for the given binary, exit if it is not found
+#
+# $1 binary to check on the path
+_check_binary() {
+  check_binary__bin="$1"
+  if [ -z "${check_binary__bin}" ]; then
+    # Can't assume we have printf here
+    echo "Must specify a path to a binary"
+    unset check_binary__bin
+    return 1
+  fi
+
+  if command -v "${check_binary__bin}" >/dev/null 2>&1; then
+    unset check_binary__bin
+    return 0
+  else
+    # Can't assume we have printf here
+    echo "Binary '${check_binary__bin}' not found in \$PATH"
+    unset check_binary__bin
+    return 1
+  fi
+}
+
+##
+# Print usage
+_print_usage() {
+  _print_version || return 1
+
+  _log "$(
+    cat <<EOF
+
+usage:
+thrapl [logging] [action] [option(s)]
+
+logging:
+    -d | --debug             Print debugging messages to stdout (multiple)
+    -q | --quiet             Quieter output (multiple)
+
+action:
+    [general]
+    -H | --help              Display this help and exit
+    -V | --version           Display application version and exit
+
+    [command]
+    -G | --get               Access current intel_rapl values
+    -S | --set [pl1:pl2]     Modify current intel_rapl values
+
+in SET mode:
+    <pl1:pl2>                Modify the PL1 and PL2 values
+    --pl1 <value>            Modify PL1 value (normal/sustained)
+    --pl2 <value>            Modify PL2 value (turbo/burst)
+    --delay                  Delay execution of "set" commands by 5 seconds
+                             (Used to work around a boot issue where values are set too early
+                             and can be overwritten by another system component.)
+
+examples:
+
+    # thrapl -S 35:60
+    Running as root, Set the intel_rapl PL1 to 35W and PL2 to 60W
+
+    # thrapl -S --pl2 60
+    Running as root, Set the intel_rapl PL2 value to 60W (60000000)
+
+    \$ thrapl -G
+    Running as a normal user, get the current intel_rapl values in W
+EOF
+  )"
+  return 0
+}
+
+##
+# Strip leading zeros from a digit string
+#
+# POSIX shell arithmetic treats a leading zero as an octal prefix, so "010"
+# would evaluate to 8 and "08" is an outright error. Normalize before any
+# $(( )) use. "000" and "0" both collapse to "0".
+#
+# $1 digit string
+_strip_leading_zeros() {
+  strip_zeros__value="$1"
+
+  while [ "${strip_zeros__value}" != "${strip_zeros__value#0}" ] &&
+    [ -n "${strip_zeros__value#0}" ]; do
+    strip_zeros__value="${strip_zeros__value#0}"
+  done
+
+  printf -- "%s" "${strip_zeros__value:-0}"
+  unset strip_zeros__value
+  return 0
+}
+
+##
+# Convert a human "wattage" value to system wattage
+#
+# $1 value
+_value_to_wattage() {
+  _v_t_w="$1"
+
+  _v_t_w="$(_strip_leading_zeros "${_v_t_w:-0}")"
+  printf -- "%s" "$((_v_t_w * 1000000))"
+  unset _v_t_w
+  return 0
+}
+
+##
+# Convert a system "wattage" value to human readable
+#
+# $1 wattage
+_wattage_to_value() {
+  _w_t_v="$1"
+  _w_t_v="$(_strip_leading_zeros "${_w_t_v:-0}")"
+  printf -- "%s" "$((_w_t_v / 1000000))"
+  unset _w_t_v
+  return 0
+}
+
+##
+# Check if the passed in variable is digits
+# Does not support negative numbers
+#
+# $1 input to check
+#
+# Returns true or false based on if something is requested to be --set
+is_digits() {
+  is_digits__input="$1"
+
+  case "${is_digits__input}" in
+  *[!0-9]* | '')
+    unset is_digits__input
+    return 1
+    ;;
+  *)
+    unset is_digits__input
+    return 0
+    ;;
+  esac
+}
+
+##
+# Print version
+_print_version() {
+  _log "thrapl <%s>" "${__VERSION}"
+  return 0
+}
+
+##
+# Increase log verbosity
+_log_more_verbose() {
+  if [ "${__log_level}" -lt "${LOG_LEVEL_ALL}" ]; then
+    __log_level=$((__log_level + 1))
+    _log_all "__log_level more verbose"
+  fi
+
+  return 0
+}
+
+##
+# Decrease log verbosity
+_log_less_verbose() {
+  if [ "${__log_level}" -gt "${LOG_LEVEL_OFF}" ]; then
+    _log_all "__log_level less verbose"
+    __log_level=$((__log_level - 1))
+  fi
+
+  return 0
+}
+
+##
+# Print a power limit as "<watts> [<microwatts>]", or N/A if it cannot be read
+#
+# $1 power limit file
+_display_power_limit() {
+  read_pl__file="$1"
+
+  if read_pl__wattage="$(cat "${read_pl__file}" 2>/dev/null)" && is_digits "${read_pl__wattage}"; then
+    printf -- "%sW [%s]" "$(_wattage_to_value "${read_pl__wattage}")" "${read_pl__wattage}"
+  else
+    printf -- "N/A"
+  fi
+
+  unset read_pl__file
+  unset read_pl__wattage
+  return 0
+}
+
+##
+# Print the current state of a single intel_rapl domain
+#
+# $1 the rapl domain directory
+_print_rapl() {
+  print_rapl__dir="$1"
+
+  if [ ! -d "${print_rapl__dir}" ]; then
+    _log_verbose "Skip missing rapl domain: %s" "${print_rapl__dir}"
+    unset print_rapl__dir
+    return 0
+  fi
+
+  _log "$(
+    cat <<EOF
+  [%s]
+    PL1 (sustained)   -> %s
+    PL2 (turbo)       -> %s
+    PL4 (system max)  -> %s
+EOF
+  )" \
+    "${print_rapl__dir##*/}" \
+    "$(_display_power_limit "${print_rapl__dir}/${SYSTEM_INTEL_RAPL_PL1}")" \
+    "$(_display_power_limit "${print_rapl__dir}/${SYSTEM_INTEL_RAPL_PL2}")" \
+    "$(_display_power_limit "${print_rapl__dir}/${SYSTEM_INTEL_RAPL_PL4}")"
+
+  unset print_rapl__dir
+  return 0
+}
+
+##
+# Get the current state of intel_rapl
+#
+do_get() {
+  _print_version || return 1
+  _print_rapl "${SYSTEM_INTEL_RAPL_DIR}" || return 1
+  _print_rapl "${SYSTEM_INTEL_RAPL_MMIO_DIR}" || return 1
+  return 0
+}
+
+##
+# Write a value to a single rapl power limit file
+#
+# $1 the target rapl file
+# $2 the user requested value in watts
+# $3 the calculated intel_rapl value
+root_do_set() {
+  root_do_set__rapl="$1"
+  root_do_set__value="$2"
+  root_do_set__wattage="$3"
+
+  _log_verbose "Write %s (%sW) to %s" "${root_do_set__wattage}" "${root_do_set__value}" "${root_do_set__rapl}"
+
+  # Perform the write
+  if ! echo "${root_do_set__wattage}" >"${root_do_set__rapl}"; then
+    _elog_quiet 'Unable to write rapl value %s (%sW) to %s' \
+      "${root_do_set__wattage}" "${root_do_set__value}" "${root_do_set__rapl}"
+
+    unset root_do_set__rapl
+    unset root_do_set__value
+    unset root_do_set__wattage
+    return 1
+  fi
+
+  unset root_do_set__rapl
+  unset root_do_set__value
+  unset root_do_set__wattage
+  return 0
+}
+
+##
+# Write the rapl files (rapl and mmio if it exists)
+# The machine enforces the lower of the two, so both must agree.
+#
+# $1 the power limit file name within a rapl domain
+# $2 the user requested value in watts
+# $3 the calculated intel_rapl value
+_set_power_limit() {
+  set_pl__file="$1"
+  set_pl__value="$2"
+  set_pl__wattage="$3"
+
+  if ! root_do_set "${SYSTEM_INTEL_RAPL_DIR}/${set_pl__file}" "${set_pl__value}" "${set_pl__wattage}"; then
+    unset set_pl__file
+    unset set_pl__value
+    unset set_pl__wattage
+    return 1
+  fi
+
+  if [ -e "${SYSTEM_INTEL_RAPL_MMIO_DIR}/${set_pl__file}" ]; then
+    if ! root_do_set "${SYSTEM_INTEL_RAPL_MMIO_DIR}/${set_pl__file}" "${set_pl__value}" "${set_pl__wattage}"; then
+      unset set_pl__file
+      unset set_pl__value
+      unset set_pl__wattage
+      return 1
+    fi
+  else
+    _log_verbose "No MMIO rapl at %s, skipping" "${SYSTEM_INTEL_RAPL_MMIO_DIR}/${set_pl__file}"
+  fi
+
+  unset set_pl__file
+  unset set_pl__value
+  unset set_pl__wattage
+  return 0
+}
+
+##
+# Check that the set call is possible, and the user is root.
+# Once this is validated, do the set calls
+#
+# An empty PL value is skipped
+#
+# $1 PL1 value
+# $2 PL1 wattage
+# $3 PL2 value
+# $4 PL2 wattage
+# $5 flag to set an execution delay
+do_set() {
+  do_set__pl1_value="$1"
+  do_set__pl1_wattage="$2"
+  do_set__pl2_value="$3"
+  do_set__pl2_wattage="$4"
+  do_set__delay="$5"
+
+  if [ "$(id -u)" -ne 0 ]; then
+    _elog_quiet "You must be root."
+
+    unset do_set__pl1_value
+    unset do_set__pl1_wattage
+    unset do_set__pl2_value
+    unset do_set__pl2_wattage
+    unset do_set__delay
+    return 1
+  fi
+
+  _log_verbose "YOU ARE ROOT"
+
+  if [ "${do_set__delay}" -eq "${EXEC_DELAY_TRUE}" ]; then
+    _log_verbose "Delay for 5 seconds requested by user"
+    sleep 5
+  fi
+
+  if [ -n "${do_set__pl1_value}" ]; then
+    _set_power_limit "${SYSTEM_INTEL_RAPL_PL1}" "${do_set__pl1_value}" "${do_set__pl1_wattage}" || {
+      _elog_quiet 'Failed to set PL1 value %s [%s]' "${do_set__pl1_value}" "${do_set__pl1_wattage}"
+
+      unset do_set__pl1_value
+      unset do_set__pl1_wattage
+      unset do_set__pl2_value
+      unset do_set__pl2_wattage
+      unset do_set__delay
+      return 1
+    }
+  fi
+
+  if [ -n "${do_set__pl2_value}" ]; then
+    _set_power_limit "${SYSTEM_INTEL_RAPL_PL2}" "${do_set__pl2_value}" "${do_set__pl2_wattage}" || {
+      _elog_quiet 'Failed to set PL2 value %s [%s]' "${do_set__pl2_value}" "${do_set__pl2_wattage}"
+
+      unset do_set__pl1_value
+      unset do_set__pl1_wattage
+      unset do_set__pl2_value
+      unset do_set__pl2_wattage
+      unset do_set__delay
+      return 1
+    }
+  fi
+
+  # Print our new current
+  do_get || {
+    unset do_set__pl1_value
+    unset do_set__pl1_wattage
+    unset do_set__pl2_value
+    unset do_set__pl2_wattage
+    unset do_set__delay
+    return 1
+  }
+
+  unset do_set__pl1_value
+  unset do_set__pl1_wattage
+  unset do_set__pl2_value
+  unset do_set__pl2_wattage
+  unset do_set__delay
+  return 0
+}
+
+##
+# The largest PL value in whole watts that may be set
+#
+# Use the lowest PL4 across rapl domains, since the lowest is enforced.
+_discover_max_set_value() {
+  max_set__value=""
+
+  for max_set__dir in "${SYSTEM_INTEL_RAPL_DIR}" "${SYSTEM_INTEL_RAPL_MMIO_DIR}"; do
+    max_set__wattage="$(cat "${max_set__dir}/${SYSTEM_INTEL_RAPL_PL4}" 2>/dev/null)" || continue
+    is_digits "${max_set__wattage}" || continue
+
+    max_set__pl4="$(_wattage_to_value "${max_set__wattage}")"
+    if [ "${max_set__pl4}" -gt 0 ]; then
+      if [ -z "${max_set__value}" ] || [ "${max_set__pl4}" -lt "${max_set__value}" ]; then
+        max_set__value="${max_set__pl4}"
+      fi
+    fi
+  done
+
+  printf -- "%s" "${max_set__value:-${SYSTEM_FALLBACK_MAX_SET_VALUE}}"
+
+  unset max_set__value
+  unset max_set__dir
+  unset max_set__wattage
+  unset max_set__pl4
+  return 0
+}
+
+##
+# Verify a valid PL# value
+#
+# $1 pl name
+# $2 pl value
+_verify_pl_value() {
+  verify__pl_name="$1"
+  verify__pl_value="$2"
+
+  _log_all "Verify %s value: %s" "${verify__pl_name}" "${verify__pl_value}"
+
+  if [ -z "${verify__pl_value}" ]; then
+    _elog_quiet "You must provide a %s value in whole watts" "${verify__pl_name}"
+    _elog_quiet 'For example: 25 -> "25 Watts"'
+    _elog_quiet 'For example: 40 -> "40 Watts"'
+
+    unset verify__pl_value
+    unset verify__pl_name
+    return 1
+  fi
+
+  if ! is_digits "${verify__pl_value}"; then
+    _elog_quiet "You must provide a %s numeric value in whole watts: (%s)" \
+      "${verify__pl_name}" "${verify__pl_value}"
+    _elog_quiet 'For example: 25 -> "25 Watts"'
+    _elog_quiet 'For example: 40 -> "40 Watts"'
+
+    unset verify__pl_value
+    unset verify__pl_name
+    return 1
+  fi
+
+  # normalize before the range check and the conversion below
+  verify__pl_value="$(_strip_leading_zeros "${verify__pl_value}")"
+
+  # Please don't try to break your PC
+  _log_all 'Verify %s value %s <= %s' \
+    "${verify__pl_name}" "${verify__pl_value}" "${SYSTEM_MAX_SET_VALUE}"
+  if [ "${#verify__pl_value}" -gt "${#SYSTEM_MAX_SET_VALUE}" ] ||
+    [ "${verify__pl_value}" -gt "${SYSTEM_MAX_SET_VALUE}" ]; then
+    _elog_quiet "%s value out of range: (%s) must be %sW or less" "${verify__pl_name}" \
+      "${verify__pl_value}" "${SYSTEM_MAX_SET_VALUE}"
+
+    unset verify__pl_value
+    unset verify__pl_name
+    return 1
+  fi
+
+  unset verify__pl_value
+  unset verify__pl_name
+  return 0
+}
+
+##
+# The main function of the script
+#
+# Only supported on intel_rapl enabled platforms
+#
+# $@ all command line args
+main() {
+  main__exec_mode="${EXEC_MODE_NONE}"
+
+  main__opt_set_pl1_value=""
+  main__opt_set_pl1_wattage=""
+  main__opt_set_pl2_value=""
+  main__opt_set_pl2_wattage=""
+
+  main__opt_set_composite_value=""
+  main__opt_set_next=""
+  main__exec_delay="${EXEC_DELAY_FALSE}"
+
+  # While risky to call eval, this is one way to
+  # emulate the bash indirect_expansion ability
+  if [ $# -gt 0 ]; then
+
+    while [ "${OPTIND}" -le "$#" ]; do
+      while getopts ":HVGSdq-:" option; do
+        case "${option}" in
+        -)
+          _log_verbose "parse long option: -%s%s" "${option}" "${OPTARG}"
+          case "${OPTARG}" in
+          help)
+            _print_usage
+            return 0
+            ;;
+          version)
+            _print_version
+            return 0
+            ;;
+          get)
+            if [ "${main__exec_mode}" = "${EXEC_MODE_SET}" ]; then
+              _elog_quiet "Cannot use --get mode when already in --set mode"
+              return 1
+            else
+              _log_all "Set operation exec_mode to GET"
+              main__exec_mode="${EXEC_MODE_GET}"
+            fi
+            ;;
+          set)
+            if [ "${main__exec_mode}" = "${EXEC_MODE_GET}" ]; then
+              _elog_quiet "Cannot use --set mode when already in --get mode"
+              return 1
+            else
+              _log_all "Set operation exec_mode to SET"
+              main__exec_mode="${EXEC_MODE_SET}"
+
+              eval main__opt_set_next="\${${OPTIND}}"
+              case "${main__opt_set_next}" in
+              -* | '') ;;
+              *)
+                main__opt_set_composite_value="${main__opt_set_next}"
+                _log_all "Composite set: %s" "${main__opt_set_composite_value}"
+                ;;
+              esac
+              unset main__opt_set_next
+            fi
+            ;;
+          debug)
+            _log_more_verbose
+            ;;
+          quiet)
+            _log_less_verbose
+            ;;
+          delay)
+            main__exec_delay="${EXEC_DELAY_TRUE}"
+            ;;
+          pl1 | pl2)
+            if [ "${main__exec_mode}" != "${EXEC_MODE_SET}" ]; then
+              _elog_quiet "Cannot use --%s outside of --set mode" "${OPTARG}"
+              return 1
+            fi
+
+            eval main__opt_set_next="\${${OPTIND}}"
+            case "${main__opt_set_next}" in
+            -* | '')
+              _elog_quiet "--%s requires a value in whole watts" "${OPTARG}"
+              return 1
+              ;;
+            esac
+
+            case "${OPTARG}" in
+            pl1)
+              main__opt_set_pl1_value="${main__opt_set_next}"
+              _log_all "PL1 set: %s" "${main__opt_set_pl1_value}"
+              ;;
+            pl2)
+              main__opt_set_pl2_value="${main__opt_set_next}"
+              _log_all "PL2 set: %s" "${main__opt_set_pl2_value}"
+              ;;
+            *)
+              _elog_quiet 'Unrecognized rapl target: %s' "${OPTARG}"
+              return 1
+              ;;
+            esac
+            unset main__opt_set_next
+            ;;
+          *)
+            # We must provide our own error message in this case
+            _elog_quiet "Illegal long option --%s (may need argument)" "${OPTARG}"
+            _print_usage
+            return 1
+            ;;
+          esac
+          ;;
+        H)
+          _print_usage
+          return 0
+          ;;
+        V)
+          _print_version
+          return 0
+          ;;
+        G)
+          if [ "${main__exec_mode}" = "${EXEC_MODE_SET}" ]; then
+            _elog_quiet "Cannot use --get mode when already in --set mode"
+            return 1
+          else
+            _log_all "Set operation exec_mode to GET"
+            main__exec_mode="${EXEC_MODE_GET}"
+          fi
+          ;;
+        S)
+          if [ "${main__exec_mode}" = "${EXEC_MODE_GET}" ]; then
+            _elog_quiet "Cannot use --set mode when already in --get mode"
+            return 1
+          else
+            _log_all "Set operation exec_mode to SET"
+            main__exec_mode="${EXEC_MODE_SET}"
+
+            eval main__opt_set_next="\${${OPTIND}}"
+            case "${main__opt_set_next}" in
+            -* | '') ;;
+            *)
+              main__opt_set_composite_value="${main__opt_set_next}"
+              _log_all "Composite set: %s" "${main__opt_set_composite_value}"
+              ;;
+            esac
+            unset main__opt_set_next
+          fi
+          ;;
+        d)
+          _log_more_verbose
+          ;;
+        q)
+          _log_less_verbose
+          ;;
+        *)
+          _elog_quiet "Illegal short option -%s (may need argument)" "${OPTARG}"
+          _print_usage
+          return 1
+          ;;
+        esac
+      done
+
+      main__option_shift_count="${OPTIND}"
+      while [ "$#" -lt "${main__option_shift_count}" ]; do
+        main__option_shift_count=$((main__option_shift_count - 1))
+      done
+
+      # Need this here incase the loop doesn't run
+      if [ "$#" -ge "${main__option_shift_count}" ]; then
+        # Shift the options
+        shift ${main__option_shift_count}
+        OPTIND=1
+      fi
+
+      # Unset
+      unset main__option_shift_count
+    done
+  fi
+
+  case "${main__exec_mode}" in
+  "${EXEC_MODE_GET}")
+    _log_verbose "exec_mode: GET"
+
+    do_get || return 1
+    ;;
+  "${EXEC_MODE_SET}")
+    if [ -n "${main__opt_set_composite_value}" ]; then
+      if [ -n "${main__opt_set_pl1_value}" ] || [ -n "${main__opt_set_pl2_value}" ]; then
+        _elog_quiet "Cannot combine <pl1:pl2> with --pl1 or --pl2"
+        return 1
+      fi
+
+      # Easy split at the :
+      main__opt_set_pl1_value="${main__opt_set_composite_value%%:*}"
+      main__opt_set_pl2_value="${main__opt_set_composite_value#*:}"
+
+      if [ "${main__opt_set_pl1_value}" = "${main__opt_set_composite_value}" ] ||
+        [ -z "${main__opt_set_pl1_value}" ] ||
+        [ -z "${main__opt_set_pl2_value}" ]; then
+        _elog_quiet "Set value must be <pl1:pl2>, got: %s" "${main__opt_set_composite_value}"
+        _elog_quiet 'For example: 35:60 -> "PL1 35 Watts, PL2 60 Watts"'
+        _elog_quiet "Use --pl1 or --pl2 to modify only one value"
+        return 1
+      fi
+    fi
+
+    if [ -z "${main__opt_set_pl1_value}" ] && [ -z "${main__opt_set_pl2_value}" ]; then
+      _elog_quiet "--set requires <pl1:pl2>, --pl1 <value>, or --pl2 <value>"
+      return 1
+    fi
+
+    if [ -n "${main__opt_set_pl1_value}" ]; then
+      if ! _verify_pl_value PL1 "${main__opt_set_pl1_value}"; then
+        return 1
+      fi
+
+      # Verified, we can yolo do this
+      main__opt_set_pl1_value="$(_strip_leading_zeros "${main__opt_set_pl1_value}")"
+      main__opt_set_pl1_wattage="$(_value_to_wattage "${main__opt_set_pl1_value}")"
+    fi
+
+    if [ -n "${main__opt_set_pl2_value}" ]; then
+      if ! _verify_pl_value PL2 "${main__opt_set_pl2_value}"; then
+        return 1
+      fi
+
+      main__opt_set_pl2_value="$(_strip_leading_zeros "${main__opt_set_pl2_value}")"
+      main__opt_set_pl2_wattage="$(_value_to_wattage "${main__opt_set_pl2_value}")"
+    fi
+
+    # Final check, resolve the current value if we are NOT requesting to set a PL#
+    # Then check that PL1 < PL2
+    main__final_pl1_wattage="${main__opt_set_pl1_wattage:-$(cat "${SYSTEM_INTEL_RAPL_DIR}/${SYSTEM_INTEL_RAPL_PL1}")}"
+    main__final_pl2_wattage="${main__opt_set_pl2_wattage:-$(cat "${SYSTEM_INTEL_RAPL_DIR}/${SYSTEM_INTEL_RAPL_PL2}")}"
+    _log_all 'Verify PL1 %s <= PL2 %s' "${main__final_pl1_wattage}" "${main__final_pl2_wattage}"
+    if [ "${main__final_pl1_wattage}" -gt "${main__final_pl2_wattage}" ]; then
+      _elog_quiet "PL1 (%sW) can not be greater than PL2 (%sW)" \
+        "$(_wattage_to_value "${main__final_pl1_wattage}")" \
+        "$(_wattage_to_value "${main__final_pl2_wattage}")"
+
+      unset main__final_pl1_wattage
+      unset main__final_pl2_wattage
+      return 1
+    fi
+    unset main__final_pl1_wattage
+    unset main__final_pl2_wattage
+
+    # Let's go go go !
+    do_set \
+      "${main__opt_set_pl1_value}" "${main__opt_set_pl1_wattage}" \
+      "${main__opt_set_pl2_value}" "${main__opt_set_pl2_wattage}" \
+      "${main__exec_delay}" || return 1
+    ;;
+  *)
+    _print_usage
+    ;;
+  esac
+
+  unset main__exec_mode
+
+  unset main__opt_set_pl1_value
+  unset main__opt_set_pl1_wattage
+
+  unset main__opt_set_pl2_value
+  unset main__opt_set_pl2_wattage
+
+  unset main__opt_set_composite_value
+  unset main__exec_delay
+
+  _log_all "Exit: Success"
+  return 0
+}
+
+# Export the LC as the default C so that we do not run into locale based quirks
+LC_ALL=C
+export LC_ALL
+
+# Log levels
+readonly LOG_LEVEL_OFF=0
+readonly LOG_LEVEL_QUIET=1
+readonly LOG_LEVEL_NORMAL=2
+readonly LOG_LEVEL_VERBOSE=3
+readonly LOG_LEVEL_ALL=4
+__log_level="${LOG_LEVEL_NORMAL}"
+
+# Execution modes
+readonly EXEC_MODE_NONE=0
+readonly EXEC_MODE_GET=1
+readonly EXEC_MODE_SET=2
+
+# Execution delay
+readonly EXEC_DELAY_FALSE=0
+readonly EXEC_DELAY_TRUE=1
+
+# Check system sanity
+# Some container based systems will not have intel_rapl related info and therefore
+# will not work with thrapl
+#
+# To target a different rapl, run with SYSTEM_INTEL_RAPL_NUM set to intel-rapl:#
+#
+# The MMIO domain is optional, not all platforms have one
+# If MMIO exists, the rapl picks the lowest number out of BOTH destinations.
+readonly SYSTEM_INTEL_RAPL_DIR="/sys/class/powercap/intel-rapl:${SYSTEM_INTEL_RAPL_NUM:-0}"
+readonly SYSTEM_INTEL_RAPL_MMIO_DIR="/sys/class/powercap/intel-rapl-mmio:${SYSTEM_INTEL_RAPL_NUM:-0}"
+readonly SYSTEM_INTEL_RAPL_ENABLED="enabled"
+readonly SYSTEM_INTEL_RAPL_PL1="constraint_0_power_limit_uw"
+readonly SYSTEM_INTEL_RAPL_PL2="constraint_1_power_limit_uw"
+readonly SYSTEM_INTEL_RAPL_PL4="constraint_2_power_limit_uw"
+
+##
+# Used when the system does not report a PL4. No intel_rapl part has a PL2 anywhere
+# near this, so a larger value is a typo.
+##
+readonly SYSTEM_FALLBACK_MAX_SET_VALUE=200
+
+# These variables are pulled from the currently running system and require coreutils
+#
+# Checked before the sysfs probing below, which already needs cat
+#
+# Need cat for heredoc
+_check_binary cat || exit 1
+
+# Root check
+_check_binary id || exit 1
+
+# Delay
+_check_binary sleep || exit 1
+
+# Check that we can actually run, these intel_rapl files must be present
+if [ ! -d "${SYSTEM_INTEL_RAPL_DIR}" ] ||
+  [ ! -r "${SYSTEM_INTEL_RAPL_DIR}/${SYSTEM_INTEL_RAPL_ENABLED}" ] ||
+  [ ! -r "${SYSTEM_INTEL_RAPL_DIR}/${SYSTEM_INTEL_RAPL_PL1}" ] ||
+  [ ! -r "${SYSTEM_INTEL_RAPL_DIR}/${SYSTEM_INTEL_RAPL_PL2}" ]; then
+  _elog_quiet "thrapl is not supported on your system."
+
+  # Exit code 2 means system unsupported
+  exit 2
+fi
+
+# Check rapl is on
+if [ "$(cat "${SYSTEM_INTEL_RAPL_DIR}/${SYSTEM_INTEL_RAPL_ENABLED}")" -eq 0 ]; then
+  _elog_quiet "thrapl: Can not run on systems that do not have intel_rapl enabled."
+
+  # Exit code 2 means system unsupported
+  exit 2
+fi
+
+# Discover the max value from PL4 or else fuck it we ball with 200W max
+# Please be safe :)
+SYSTEM_MAX_SET_VALUE="$(_discover_max_set_value)"
+readonly SYSTEM_MAX_SET_VALUE
+
+# Exit 0 is success, exit 1 is some failure.
+main "$@" || exit 1
+exit 0
