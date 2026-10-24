@@ -24,4 +24,4 @@ Type=simple
 ExecStart=%PREFIX%/bin/thrapl --delay -S %i
 
 [Install]
-WantedBy=graphical.target
+WantedBy=graphical.target suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target
