@@ -27,7 +27,14 @@ main() {
     return 1
   fi
 
-  shellcheck "${ROOT}"/thrapl "${ROOT}"/bin/* "$@"
+  shellcheck \
+    "${ROOT}"/thrapl \
+    "${ROOT}"/assets/checkinstall/docheckinstall \
+    "${ROOT}"/assets/pkgbuild/git/PKGBUILD \
+    "${ROOT}"/res/shell/bash/* \
+    "${ROOT}"/bin/* \
+    "${ROOT}"/tests/* \
+    "$@"
   return "$?"
 }
 

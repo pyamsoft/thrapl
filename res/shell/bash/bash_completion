@@ -1,3 +1,5 @@
+# shellcheck shell=bash
+
 # The GPLv2 License
 #
 #   Copyright (C) 2026 pyamsoft
@@ -26,19 +28,19 @@ _thrapl() {
 
   if [[ ${cur} = --* ]]; then
     if [[ ${prev} = "--set" ]] || [[ ${prev} = "-S" ]]; then
-      COMPREPLY=($(compgen -W "" -- "${cur}"))
+      mapfile -t COMPREPLY < <(compgen -W "" -- "${cur}")
     elif [[ ${prev} = "--get" ]] || [[ ${prev} = "-G" ]]; then
-      COMPREPLY=($(compgen -W "" -- "${cur}"))
+      mapfile -t COMPREPLY < <(compgen -W "" -- "${cur}")
     else
-      COMPREPLY=($(compgen -W "${long_actions}" -- "${cur}"))
+      mapfile -t COMPREPLY < <(compgen -W "${long_actions}" -- "${cur}")
     fi
   elif [[ ${cur} = * ]]; then
     if [[ ${prev} = "--set" ]] || [[ ${prev} = "-S" ]]; then
-      COMPREPLY=($(compgen -W "" -- "${cur}"))
+      mapfile -t COMPREPLY < <(compgen -W "" -- "${cur}")
     elif [[ ${prev} = "--get" ]] || [[ ${prev} = "-G" ]]; then
-      COMPREPLY=($(compgen -W "" -- "${cur}"))
+      mapfile -t COMPREPLY < <(compgen -W "" -- "${cur}")
     else
-      COMPREPLY=($(compgen -W "${short_actions}" -- "${cur}"))
+      mapfile -t COMPREPLY < <(compgen -W "${short_actions}" -- "${cur}")
     fi
   fi
 
