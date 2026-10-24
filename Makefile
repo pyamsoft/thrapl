@@ -29,22 +29,20 @@ DOC_INSTALL_SRC="README.md"
 LICENSE_INSTALL_SRC="LICENSE"
 BASH_INSTALL_SRC="$(RES_DIR)/shell/bash/bash_completion"
 SYSTEMD_SERVICE_INSTALL_SRC="$(RES_DIR)/systemd/thrapl@.service"
-SYSTEMD_SERVICE_SLEEP_INSTALL_SRC="$(RES_DIR)/systemd/thrapl-sleep@.service"
 
 SCRIPT_INSTALL_TARGET="$(DESTDIR)/$(PREFIX)/bin/$(NAME)"
 DOC_INSTALL_TARGET="$(DESTDIR)/$(PREFIX)/share/doc/$(NAME)/README.md"
 LICENSE_INSTALL_TARGET="$(DESTDIR)/$(PREFIX)/share/doc/$(NAME)/LICENSE"
 BASH_INSTALL_TARGET="$(DESTDIR)/$(SYSTEM_PREFIX)/share/bash-completion/completions/$(NAME)"
 SYSTEMD_SERVICE_INSTALL_TARGET="$(DESTDIR)/$(SYSTEM_PREFIX)/lib/systemd/system/$(NAME)@.service"
-SYSTEMD_SERVICE_SLEEP_INSTALL_TARGET="$(DESTDIR)/$(SYSTEM_PREFIX)/lib/systemd/system/$(NAME)-sleep@.service"
 
 .PHONY: all install uninstall edit \
 	install-doc install-license install-script install-res \
 	install-bash \
-	install-systemd install-systemd-thrapl install-systemd-thrapl-sleep \
+	install-systemd install-systemd-thrapl \
 	uninstall-script uninstall-doc uninstall-license uninstall-res \
 	uninstall-bash \
-	uninstall-systemd uninstall-systemd-thrapl uninstall-systemd-thrapl-sleep
+	uninstall-systemd uninstall-systemd-thrapl
 
 all:
 	@echo "Targets"
@@ -102,19 +100,12 @@ install-bash:
 
 install-systemd:
 	@$(MAKE) install-systemd-thrapl
-	@$(MAKE) install-systemd-thrapl-sleep
 
 install-systemd-thrapl:
 	@echo "  INSTALL  $(SYSTEMD_SERVICE_INSTALL_TARGET)"
 	@mkdir -p "$(shell dirname $(SYSTEMD_SERVICE_INSTALL_TARGET))"
 	@install -Dm 644 "$(SYSTEMD_SERVICE_INSTALL_SRC)" "$(SYSTEMD_SERVICE_INSTALL_TARGET)"
 	@sed -i "s|%PREFIX%|$(PREFIX)|" "$(SYSTEMD_SERVICE_INSTALL_TARGET)"
-
-install-systemd-thrapl-sleep:
-	@echo "  INSTALL  $(SYSTEMD_SERVICE_SLEEP_INSTALL_TARGET)"
-	@mkdir -p "$(shell dirname $(SYSTEMD_SERVICE_SLEEP_INSTALL_TARGET))"
-	@install -Dm 644 "$(SYSTEMD_SERVICE_SLEEP_INSTALL_SRC)" "$(SYSTEMD_SERVICE_SLEEP_INSTALL_TARGET)"
-	@sed -i "s|%PREFIX%|$(PREFIX)|" "$(SYSTEMD_SERVICE_SLEEP_INSTALL_TARGET)"
 
 uninstall:
 	@echo "Uninstalling..."
@@ -155,12 +146,7 @@ uninstall-bash:
 
 uninstall-systemd:
 	@$(MAKE) uninstall-systemd-thrapl
-	@$(MAKE) uninstall-systemd-thrapl-sleep
 
 uninstall-systemd-thrapl:
 	@echo "  UNINSTALL  $(SYSTEMD_SERVICE_INSTALL_TARGET)"
 	@rm -f "$(SYSTEMD_SERVICE_INSTALL_TARGET)"
-
-uninstall-systemd-thrapl-sleep:
-	@echo "  UNINSTALL  $(SYSTEMD_SERVICE_SLEEP_INSTALL_TARGET)"
-	@rm -f "$(SYSTEMD_SERVICE_SLEEP_INSTALL_TARGET)"
