@@ -17,7 +17,7 @@
 #   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 [Unit]
 Description=Program to manage intel_rapl PL1 and PL2 power values
-After=tlp.service power-profiles-daemon.service acpid.service laptop-mode.service powertop.service tuned.service tuned-ppd.service
+After=tlp.service tlp-pd.service power-profiles-daemon.service acpid.service laptop-mode.service powertop.service tuned.service tuned-ppd.service
 
 [Service]
 Type=simple
