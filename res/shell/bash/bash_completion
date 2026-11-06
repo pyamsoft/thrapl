@@ -22,32 +22,53 @@ _thrapl() {
   COMPREPLY=()
   local cur="${COMP_WORDS[COMP_CWORD]}"
   local prev="${COMP_WORDS[COMP_CWORD - 1]}"
-  local short_actions="-V -H -S -G -d -q"
-  local long_actions="--quiet --version --help --set --get --debug --pl1 --pl2 --delay"
+  local mode=""
+  local word=""
+  local i=0
+  local -A used=()
 
+  for ((i = 1; i < COMP_CWORD; i++)); do
+    word="${COMP_WORDS[i]}"
+    case "${word}" in
+    -S | --set) mode="set" ;;
+    -G | --get) mode="get" ;;
+    esac
+    used["${word}"]=1
+  done
+
+  case "${prev}" in
+  --pl1 | --pl2)
+    return 0
+    ;;
+  esac
+
+  local short_actions=""
+  local long_actions=""
+  case "${mode}" in
+  set)
+    short_actions="-d -q"
+    long_actions="--debug --quiet"
+    for word in --pl1 --pl2 --delay; do
+      if [[ -z ${used[${word}]} ]]; then
+        long_actions+=" ${word}"
+      fi
+    done
+    ;;
+  get)
+    short_actions="-d -q"
+    long_actions="--debug --quiet"
+    ;;
+  *)
+    short_actions="-V -H -S -G -d -q"
+    long_actions="--quiet --version --help --set --get --debug"
+    ;;
+  esac
 
   if [[ ${cur} = --* ]]; then
-    if [[ ${prev} = "--set" ]] || [[ ${prev} = "-S" ]]; then
-      mapfile -t COMPREPLY < <(compgen -W "" -- "${cur}")
-    elif [[ ${prev} = "--get" ]] || [[ ${prev} = "-G" ]]; then
-      mapfile -t COMPREPLY < <(compgen -W "" -- "${cur}")
-    else
-      mapfile -t COMPREPLY < <(compgen -W "${long_actions}" -- "${cur}")
-    fi
-  elif [[ ${cur} = * ]]; then
-    if [[ ${prev} = "--set" ]] || [[ ${prev} = "-S" ]]; then
-      mapfile -t COMPREPLY < <(compgen -W "" -- "${cur}")
-    elif [[ ${prev} = "--get" ]] || [[ ${prev} = "-G" ]]; then
-      mapfile -t COMPREPLY < <(compgen -W "" -- "${cur}")
-    else
-      mapfile -t COMPREPLY < <(compgen -W "${short_actions}" -- "${cur}")
-    fi
+    mapfile -t COMPREPLY < <(compgen -W "${long_actions}" -- "${cur}")
+  else
+    mapfile -t COMPREPLY < <(compgen -W "${short_actions} ${long_actions}" -- "${cur}")
   fi
-
-  unset cur
-  unset prev
-  unset short_actions
-  unset long_actions
 }
 
 complete -F _thrapl thrapl
