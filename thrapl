@@ -169,9 +169,6 @@ in SET mode:
     <pl1:pl2>                Modify the PL1 and PL2 values
     --pl1 <value>            Modify PL1 value (normal/sustained)
     --pl2 <value>            Modify PL2 value (turbo/burst)
-    --delay                  Delay execution of "set" commands by 5 seconds
-                             (Used to work around a boot issue where values are set too early
-                             and can be overwritten by another system component.)
 
 examples:
 
@@ -419,13 +416,11 @@ _set_power_limit() {
 # $2 PL1 wattage
 # $3 PL2 value
 # $4 PL2 wattage
-# $5 flag to set an execution delay
 do_set() {
   do_set__pl1_value="$1"
   do_set__pl1_wattage="$2"
   do_set__pl2_value="$3"
   do_set__pl2_wattage="$4"
-  do_set__delay="$5"
 
   if [ "$(id -u)" -ne 0 ]; then
     _elog_quiet "You must be root."
@@ -434,16 +429,10 @@ do_set() {
     unset do_set__pl1_wattage
     unset do_set__pl2_value
     unset do_set__pl2_wattage
-    unset do_set__delay
     return 1
   fi
 
   _log_verbose "YOU ARE ROOT"
-
-  if [ "${do_set__delay}" -eq "${EXEC_DELAY_TRUE}" ]; then
-    _log_verbose "Delay for 5 seconds requested by user"
-    sleep 5
-  fi
 
   if [ -n "${do_set__pl1_value}" ]; then
     _set_power_limit "${SYSTEM_INTEL_RAPL_PL1}" "${do_set__pl1_value}" "${do_set__pl1_wattage}" || {
@@ -453,7 +442,6 @@ do_set() {
       unset do_set__pl1_wattage
       unset do_set__pl2_value
       unset do_set__pl2_wattage
-      unset do_set__delay
       return 1
     }
   fi
@@ -466,7 +454,6 @@ do_set() {
       unset do_set__pl1_wattage
       unset do_set__pl2_value
       unset do_set__pl2_wattage
-      unset do_set__delay
       return 1
     }
   fi
@@ -477,7 +464,6 @@ do_set() {
     unset do_set__pl1_wattage
     unset do_set__pl2_value
     unset do_set__pl2_wattage
-    unset do_set__delay
     return 1
   }
 
@@ -485,7 +471,6 @@ do_set() {
   unset do_set__pl1_wattage
   unset do_set__pl2_value
   unset do_set__pl2_wattage
-  unset do_set__delay
   return 0
 }
 
@@ -586,7 +571,6 @@ main() {
 
   main__opt_set_composite_value=""
   main__opt_set_next=""
-  main__exec_delay="${EXEC_DELAY_FALSE}"
 
   # While risky to call eval, this is one way to
   # emulate the bash indirect_expansion ability
@@ -641,7 +625,7 @@ main() {
             _log_less_verbose
             ;;
           delay)
-            main__exec_delay="${EXEC_DELAY_TRUE}"
+            _log_quiet 'The --%s option has been deprecated and removed.' "${OPTARG}"
             ;;
           pl1 | pl2)
             if [ "${main__exec_mode}" != "${EXEC_MODE_SET}" ]; then
@@ -819,8 +803,7 @@ main() {
     # Let's go go go !
     do_set \
       "${main__opt_set_pl1_value}" "${main__opt_set_pl1_wattage}" \
-      "${main__opt_set_pl2_value}" "${main__opt_set_pl2_wattage}" \
-      "${main__exec_delay}" || return 1
+      "${main__opt_set_pl2_value}" "${main__opt_set_pl2_wattage}" || return 1
     ;;
   *)
     _print_usage
@@ -836,7 +819,6 @@ main() {
   unset main__opt_set_pl2_wattage
 
   unset main__opt_set_composite_value
-  unset main__exec_delay
 
   _log_all "Exit: Success"
   return 0
@@ -858,10 +840,6 @@ __log_level="${LOG_LEVEL_NORMAL}"
 readonly EXEC_MODE_NONE=0
 readonly EXEC_MODE_GET=1
 readonly EXEC_MODE_SET=2
-
-# Execution delay
-readonly EXEC_DELAY_FALSE=0
-readonly EXEC_DELAY_TRUE=1
 
 # Check system sanity
 # Some container based systems will not have intel_rapl related info and therefore
@@ -893,9 +871,6 @@ _check_binary cat || exit 1
 
 # Root check
 _check_binary id || exit 1
-
-# Delay
-_check_binary sleep || exit 1
 
 # Check that we can actually run, these intel_rapl files must be present
 if [ ! -d "${SYSTEM_INTEL_RAPL_DIR}" ] ||
